@@ -1,0 +1,6 @@
+ssh_keys
+**/*.log
+**/.vagrant
+
+
+.DS_Store
