@@ -1,0 +1,117 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+ubuntunodes=1
+centosnodes=1
+baseip="192.168.33"
+minionsstartip=20
+prefix="minion"
+privatenetworkname="automation"
+
+Vagrant.configure("2") do |config|
+
+  # master
+  config.vm.define "ansible", primary: true do |ansible|
+    ansible.vm.box = "ubuntu/xenial64"
+    ansible.vm.hostname = "ansible"
+
+    folder = "./ssh_keys/ansible"
+    ansible.vm.synced_folder folder, "/vagrant", create: true
+
+    ip="#{baseip}.10"
+    ansible.vm.network "private_network", ip: ip, virtualbox__intnet: privatenetworkname
+
+    ansible.vm.provider "virtualbox" do |vb|
+      vb.memory = "512"
+    end
+
+    ansible.vm.provision "shell", inline: <<-SHELL
+    apt update
+    apt upgrade -y
+    apt install -y language-pack-fr
+    apt install -y software-properties-common
+    apt-add-repository -y --update ppa:ansible/ansible
+    apt install -y ansible
+    SHELL
+
+    ansible.vm.provision "shell", privileged: false, path: "./scripts/ssh_keys.sh",
+      env: { "PREFIX" => prefix, "BASE_IP" => baseip, "IP_VALUES" => "$(seq #{minionsstartip} #{minionsstartip + ubuntunodes + centosnodes})" }
+
+    # add ansible pub key
+    ansible.vm.provision "shell", privileged: false, inline: <<-SHELL
+    grep 'vagrant@ansible' ~/.ssh/authorized_keys &>/dev/null || {
+      cat /vagrant/id_rsa.pub >> ~/.ssh/authorized_keys
+      chmod 0600 ~/.ssh/authorized_keys
+    }
+    SHELL
+
+    # add node(s) to ansible inventory
+    ansible.vm.provision "shell", privileged: false, path: "./scripts/ansible_hosts.sh",
+      env: { "PREFIX" => prefix, "TOTAL_NODES" => "$(seq 1 #{ubuntunodes + centosnodes})" }
+  end
+
+  # Ubuntu node(s)
+  (1..ubuntunodes).each do |i|
+    vm_name = "#{prefix}#{i}"
+    config.vm.define vm_name do |node|
+      node.vm.box = "ubuntu/xenial64"
+      node.vm.hostname = vm_name
+
+      folder = "./ssh_keys/#{vm_name}"
+      node.vm.synced_folder folder, "/vagrant", create: true
+
+      ip="#{baseip}.#{minionsstartip+i}"
+      node.vm.network "private_network", ip: ip, virtualbox__intnet: privatenetworkname
+
+      node.vm.provision "file", source: "./ssh_keys/ansible/id_rsa.pub", destination: "$HOME/ansible_rsa.pub"
+
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = "256"
+      end
+
+      node.vm.provision "shell", inline: <<-SHELL
+      apt update
+      apt upgrade -y
+      apt install -y language-pack-fr
+      SHELL
+      
+      node.vm.provision "shell", privileged: false, path: "./scripts/ssh_keys.sh",
+        env: { "PREFIX" => prefix, "BASE_IP" => baseip, "IP_VALUES" => "$(seq #{minionsstartip} #{minionsstartip + ubuntunodes + centosnodes})" }
+    end
+  end
+
+  # CentOS node(s)
+  (1..centosnodes).each do |i|
+    vm_name = "#{prefix}#{i + ubuntunodes}"
+    config.vm.define vm_name do |node|
+      node.vm.box = "centos/7"
+      node.vm.hostname = vm_name
+
+      folder = "./ssh_keys/#{vm_name}"
+      node.vm.synced_folder folder, "/vagrant", create: true
+
+      ip="#{baseip}.#{minionsstartip + ubuntunodes + i}"
+      node.vm.network "private_network", ip: ip, virtualbox__intnet: privatenetworkname
+
+      node.vm.provision "file", source: "./ssh_keys/ansible/id_rsa.pub", destination: "$HOME/ansible_rsa.pub"
+
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = "256"
+      end
+
+      node.vm.provision "shell", inline: <<-SHELL
+      yum check-update
+      yum update -y --nogpgcheck
+      yum clean all
+      SHELL
+      
+      node.vm.provision "shell", privileged: false, path: "./scripts/ssh_keys.sh",
+        env: { "PREFIX" => prefix, "BASE_IP" => baseip, "IP_VALUES" => "$(seq #{minionsstartip} #{minionsstartip + ubuntunodes + centosnodes})" }
+    end
+  end
+
+  # All
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = false
+  end
+end
